@@ -2,10 +2,6 @@ server {
     listen 80;
     server_name localhost;
 
-    # Usar el resolver detectado dinámicamente desde /etc/resolv.conf
-    # Esto asegura compatibilidad con cualquier entorno (Render, AWS, Local)
-    resolver $DNS_RESOLVER valid=10s;
-
     location / {
         root /usr/share/nginx/html;
         index index.html index.htm;
@@ -13,16 +9,19 @@ server {
     }
 
     location /api/ {
-        # Resolución perezosa (Lazy Resolution) usando variable
-        # Nginx resolverá el dominio en runtime usando $DNS_RESOLVER
-        set $upstream_app http://$API_BASE_URL;
-
+        # Usamos envsubst para inyectar la URL completa (incluyendo http/https)
+        # Esto genera una configuración estática que Nginx resuelve al inicio.
+        # Al usar la URL pública de Render, garantizamos que el DNS funcione.
         rewrite ^/api/(.*) /$1 break;
-        proxy_pass $upstream_app;
+        proxy_pass $API_BASE_URL;
+        
         proxy_http_version 1.1;
         proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection 'upgrade';
-        proxy_set_header Host $host;
+        proxy_set_header Host $proxy_host; # Importante para HTTPS/SNI
         proxy_cache_bypass $http_upgrade;
+        
+        # Necesario si el upstream es HTTPS (Render Public URL)
+        proxy_ssl_server_name on;
     }
 }
