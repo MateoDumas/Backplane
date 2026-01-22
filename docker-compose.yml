@@ -1,0 +1,64 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: auth_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  api-gateway:
+    build: ./api-gateway
+    ports:
+      - "8080:8080"
+    environment:
+      - AUTH_SERVICE_URL=http://auth-service:3000
+      - PAYMENT_SERVICE_URL=http://payment-service:3001
+      - NOTIFICATION_SERVICE_URL=http://notification-service:3002
+    depends_on:
+      - auth-service
+      - payment-service
+      - notification-service
+
+  auth-service:
+    build: ./auth-service
+    ports:
+      - "3000:3000"
+    environment:
+      - PORT=3000
+      - SECRET_KEY=supersecretkey
+      - DATABASE_URL=postgresql://postgres:password@postgres:5432/auth_db
+    depends_on:
+      - postgres
+
+  frontend:
+    build: ./frontend
+    ports:
+      - "3003:80"
+
+  payment-service:
+    build: ./payment-service
+    ports:
+      - "3001:3001"
+    environment:
+      - PORT=3001
+      - SECRET_KEY=supersecretkey
+      - DATABASE_URL=postgresql://postgres:password@postgres:5432/auth_db
+    depends_on:
+      - postgres
+
+  notification-service:
+    build: ./notification-service
+    ports:
+      - "3002:3002"
+    environment:
+      - PORT=3002
+      - SECRET_KEY=supersecretkey
+
+volumes:
+  postgres_data:

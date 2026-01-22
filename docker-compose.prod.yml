@@ -1,0 +1,70 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    restart: always
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: auth_db
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    # Ports not exposed to host in production for security
+
+  api-gateway:
+    build: ./api-gateway
+    restart: always
+    ports:
+      - "8080:8080" # Exposed for external API access (optional)
+    environment:
+      - NODE_ENV=production
+      - PORT=8080
+      - AUTH_SERVICE_URL=http://auth-service:3000
+      - PAYMENT_SERVICE_URL=http://payment-service:3001
+      - NOTIFICATION_SERVICE_URL=http://notification-service:3002
+    depends_on:
+      - auth-service
+      - payment-service
+      - notification-service
+
+  auth-service:
+    build: ./auth-service
+    restart: always
+    environment:
+      - NODE_ENV=production
+      - PORT=3000
+      - SECRET_KEY=supersecretkey
+      - DATABASE_URL=postgresql://postgres:password@postgres:5432/auth_db
+    depends_on:
+      - postgres
+
+  payment-service:
+    build: ./payment-service
+    restart: always
+    environment:
+      - NODE_ENV=production
+      - PORT=3001
+      - SECRET_KEY=supersecretkey
+      - DATABASE_URL=postgresql://postgres:password@postgres:5432/auth_db
+    depends_on:
+      - postgres
+
+  notification-service:
+    build: ./notification-service
+    restart: always
+    environment:
+      - NODE_ENV=production
+      - PORT=3002
+      - SECRET_KEY=supersecretkey
+
+  frontend:
+    build: ./frontend
+    restart: always
+    ports:
+      - "80:80" # Production HTTP port
+    depends_on:
+      - api-gateway
+
+volumes:
+  postgres_data:
