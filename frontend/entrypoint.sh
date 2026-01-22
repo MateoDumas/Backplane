@@ -53,13 +53,12 @@ echo "Generating Nginx configuration using sed..."
 API_HOST=$(echo $API_BASE_URL | sed 's|http://||' | sed 's|https://||')
 echo "Extracted API_HOST='$API_HOST'"
 
-sed -e "s|\${API_BASE_URL}|$API_BASE_URL|g" \
-    -e "s|\${DNS_RESOLVER}|$DNS_RESOLVER|g" \
+sed -e "s|__API_BASE_URL__|$API_BASE_URL|g" \
+    -e "s|__DNS_RESOLVER__|$DNS_RESOLVER|g" \
     /etc/nginx/default.conf.tpl > /etc/nginx/conf.d/default.conf
 
-echo "Configuration generated. Verification:"
-grep "proxy_pass" /etc/nginx/conf.d/default.conf
-grep "resolver" /etc/nginx/conf.d/default.conf
+echo "Configuration generated. Full content:"
+cat /etc/nginx/conf.d/default.conf
 
 echo "Starting Nginx..."
 exec nginx -g 'daemon off;'
