@@ -16,8 +16,8 @@ server {
         rewrite ^/api/(.*) /$1 break;
         
         # Usamos una variable para forzar la resolución DNS en tiempo de ejecución (runtime)
-        # en lugar de al inicio (startup). Esto evita que Nginx se caiga si el host no existe aún.
-        set $upstream_target ${API_BASE_URL};
+        # IMPORTANTE: Definimos la variable ANTES de usarla.
+        set $upstream_target "${API_BASE_URL}";
         proxy_pass $upstream_target;
         
         proxy_http_version 1.1;
