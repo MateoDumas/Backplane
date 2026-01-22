@@ -9,14 +9,16 @@ server {
     }
 
     location /api/ {
-        # Configuración dinámica inyectada por envsubst
-        resolver ${DNS_RESOLVER} valid=30s;
+        # Configuración dinámica inyectada por entrypoint.sh
+        resolver ${DNS_RESOLVER} valid=10s;
         
         # Reescribir la URL para quitar /api/
         rewrite ^/api/(.*) /$1 break;
         
-        # Proxy pass usando la URL completa (protocolo + host)
-        proxy_pass ${API_BASE_URL};
+        # Usamos una variable para forzar la resolución DNS en tiempo de ejecución (runtime)
+        # en lugar de al inicio (startup). Esto evita que Nginx se caiga si el host no existe aún.
+        set $upstream_target ${API_BASE_URL};
+        proxy_pass $upstream_target;
         
         proxy_http_version 1.1;
         proxy_set_header Upgrade $http_upgrade;
