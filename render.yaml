@@ -85,7 +85,7 @@ services:
       - key: API_BASE_URL
         fromService:
           name: api-gateway
-          property: hostport
+          property: url
 
 databases:
   - name: backplane-db

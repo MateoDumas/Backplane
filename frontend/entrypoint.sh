@@ -1,13 +1,14 @@
 #!/bin/sh
 set -e
 
-echo "Starting Frontend Entrypoint..."
+echo "Starting Frontend Entrypoint (Public URL Mode)..."
 
 # --- 1. ENV VAR SETUP ---
 
 # Fix API_BASE_URL
 if [ -z "$API_BASE_URL" ]; then
     echo "WARNING: API_BASE_URL is empty. Defaulting to internal service."
+    # Fallback to internal if missing, but likely won't work if public is expected
     export API_BASE_URL="http://api-gateway:10000"
 fi
 
@@ -16,8 +17,8 @@ case "$API_BASE_URL" in
   http://*|https://*)
     ;;
   *)
-    echo "Adding http:// to API_BASE_URL"
-    export API_BASE_URL="http://$API_BASE_URL"
+    echo "Adding https:// to API_BASE_URL (Assuming Public)"
+    export API_BASE_URL="https://$API_BASE_URL"
     ;;
 esac
 
@@ -30,9 +31,8 @@ echo "API_BASE_URL = $API_BASE_URL"
 echo "----------------------------------------"
 
 # --- 2. GENERATE CONFIG FILE ---
-# We use direct substitution for proxy_pass.
-# We rely on Render's 'fromService' to provide a valid, resolvable host:port.
-# We trust the system resolver (libc) to handle the DNS lookup at startup.
+# We use the Public URL to guarantee resolution via Google DNS (8.8.8.8).
+# We use the Variable Trick to prevent startup crashes.
 
 cat > /etc/nginx/conf.d/default.conf <<EOF
 server {
@@ -48,12 +48,21 @@ server {
 
     # Proxy API requests
     location /api/ {
-        # Strip /api/ prefix
+        # 1. Use Google DNS to resolve public Render URLs
+        resolver 8.8.8.8 8.8.4.4 valid=300s;
+        
+        # 2. Use a variable to force runtime resolution (Prevent startup crash)
+        set \$upstream_target "$API_BASE_URL";
+        
+        # 3. Strip /api/ prefix
         rewrite ^/api/(.*) /\$1 break;
         
-        # Proxy to the backend
-        # We use the shell variable directly here, so it gets hardcoded in the config.
-        proxy_pass $API_BASE_URL;
+        # 4. Proxy to the variable
+        proxy_pass \$upstream_target;
+        
+        # SSL Support (Required for Public HTTPS URLs)
+        proxy_ssl_server_name on;
+        proxy_ssl_protocols TLSv1.2 TLSv1.3;
         
         # Headers
         proxy_http_version 1.1;
