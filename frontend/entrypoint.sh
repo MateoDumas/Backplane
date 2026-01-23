@@ -69,15 +69,10 @@ server {
         # Strip /api/ prefix
         rewrite ^/api/(.*) /\$1 break;
         
-        # Runtime variable trick:
-        # Nginx won't crash at startup if this host is missing.
-        # It will try to resolve it only when a request comes in.
-        # IMPORTANT: Use direct string interpolation to avoid "uninitialized variable" errors
-        set \$upstream_host "api-gateway";
-        set \$upstream_port "10000";
-        set \$upstream_proto "http";
-        
-        proxy_pass \$upstream_proto://\$upstream_host:\$upstream_port;
+        # Simplest possible proxy pass to avoid variable interpolation issues
+        # We use the variable ONLY for the host to delay DNS resolution
+        set \$backend_upstream "http://api-gateway:10000";
+        proxy_pass \$backend_upstream;
         
         proxy_http_version 1.1;
         proxy_set_header Upgrade \$http_upgrade;
