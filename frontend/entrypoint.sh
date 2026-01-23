@@ -6,6 +6,13 @@ echo ">>> RAW API_BASE_URL: '$API_BASE_URL' <<<"
 echo "Mode: ROBUST DNS + Public/Private Fallback"
 
 # --- 1. SETUP ENV ---
+# Support Manual Override via Env Var (Requested by User)
+if [ -n "$MANUAL_API_URL" ]; then
+    echo "🔵 FOUND MANUAL_API_URL: '$MANUAL_API_URL'"
+    echo "    Overriding API_BASE_URL..."
+    export API_BASE_URL="$MANUAL_API_URL"
+fi
+
 # Ensure protocol
 case "$API_BASE_URL" in
   http://*|https://*)
@@ -35,13 +42,21 @@ resolve_with_retries() {
     
     until nslookup "$host" > /dev/null 2>&1 || [ $count -eq $retries ]; do
         echo "[$count/$retries] Waiting for DNS resolution of '$host'..."
+        # Debug: Show what nslookup sees (to stdout)
+        nslookup "$host" || true
         sleep 1
         count=$((count+1))
     done
     
     if nslookup "$host" > /dev/null 2>&1; then
+        echo "✅ DNS Resolution Successful for '$host'"
+        nslookup "$host"
         return 0
     else
+        echo "❌ DNS Resolution FAILED for '$host'"
+        echo "Debug info:"
+        cat /etc/resolv.conf
+        nslookup "$host"
         return 1
     fi
 }
