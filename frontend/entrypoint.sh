@@ -90,7 +90,18 @@ if [ -n "$RESOLVED_IP" ]; then
     API_BASE_URL=$(echo "$API_BASE_URL" | sed "s/$TEMP_HOST/$RESOLVED_IP/")
     echo "    -> Updated API_BASE_URL: $API_BASE_URL"
 else
-    echo "⚠️  Could not pre-resolve '$TEMP_HOST'. Leaving as is."
+    echo "⚠️  Could not pre-resolve '$TEMP_HOST' or fallback 'api-gateway'."
+    
+    # CRITICAL FIX: If resolution failed for the Render slug (api-gateway-xxxx),
+    # force usage of the stable service name 'api-gateway'.
+    # The slug often fails in internal DNS, but the service name alias should work eventually.
+    if [ "$TEMP_HOST" != "api-gateway" ]; then
+        echo "🔄 Forcing switch from slug '$TEMP_HOST' to stable name 'api-gateway'"
+        API_BASE_URL=$(echo "$API_BASE_URL" | sed "s/$TEMP_HOST/api-gateway/")
+        echo "    -> New API_BASE_URL: $API_BASE_URL"
+    else
+        echo "⚠️  Hostname is already 'api-gateway'. Leaving as is."
+    fi
 fi
 
 echo ">>> FINAL API_BASE_URL: '$API_BASE_URL' <<<"
