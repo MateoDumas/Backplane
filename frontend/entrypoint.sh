@@ -41,87 +41,31 @@ esac
 # Strip trailing slash
 API_BASE_URL=${API_BASE_URL%/}
 
-# --- PRE-RESOLVE HOSTNAME (Fix for Nginx Resolver Search Domain Limitation) ---
-# Nginx resolver does not respect /etc/resolv.conf search domains.
-# We pre-resolve the hostname to an IP using system tools (which DO respect search domains).
+# --- PRE-RESOLVE HOSTNAME ---
+# Skipped - Relying on System DNS at startup
 
-# Extract Hostname (remove protocol and port)
+# String Replace Logic only (No DNS)
 TEMP_URL=${API_BASE_URL#*://}
 TEMP_HOST=${TEMP_URL%%:*}
 TEMP_HOST=${TEMP_HOST%%/*}
 
-echo "Attempting to pre-resolve host: '$TEMP_HOST'"
-
-# Helper function to resolve
-resolve_host() {
-    local host=$1
-    if command -v getent >/dev/null; then
-        getent hosts "$host" | awk '{ print $1 }' | head -n 1
-    elif command -v nslookup >/dev/null; then
-        # Parse nslookup output, skipping the DNS server address
-        nslookup "$host" | awk '/^Address: / { print $2 }' | tail -n +2 | head -n 1
-    fi
-}
-
-# 1. Try resolving the provided host
-RESOLVED_IP=$(resolve_host "$TEMP_HOST")
-
-# 2. If that fails, try 'api-gateway' (service name) as fallback
-if [ -z "$RESOLVED_IP" ]; then
-    echo "⚠️  Could not pre-resolve '$TEMP_HOST'. Trying fallback 'api-gateway'..."
-    RESOLVED_IP=$(resolve_host "api-gateway")
-fi
-
-# 3. If still empty, try 'api-gateway' with search domains explicitly if needed (usually handled by system)
-# But let's debug external DNS too
-if [ -z "$RESOLVED_IP" ]; then
-    echo "❌ Failed to resolve internal hosts. Testing external DNS (google.com)..."
-    EXT_IP=$(resolve_host "google.com")
-    if [ -n "$EXT_IP" ]; then
-        echo "   External DNS works ($EXT_IP). Internal DNS might be broken or service name is wrong."
-    else
-        echo "   External DNS also FAILED. Network/DNS configuration issue."
-    fi
-fi
-
-if [ -n "$RESOLVED_IP" ]; then
-    echo "✅ Successfully resolved to '$RESOLVED_IP'"
-    # Replace host with IP in API_BASE_URL
-    API_BASE_URL=$(echo "$API_BASE_URL" | sed "s/$TEMP_HOST/$RESOLVED_IP/")
-    echo "    -> Updated API_BASE_URL: $API_BASE_URL"
-else
-    echo "⚠️  Could not pre-resolve '$TEMP_HOST' or fallback 'api-gateway'."
-    
-    # CRITICAL FIX: If resolution failed for the Render slug (api-gateway-xxxx),
-    # force usage of the stable service name 'api-gateway'.
-    # The slug often fails in internal DNS, but the service name alias should work eventually.
-    if [ "$TEMP_HOST" != "api-gateway" ]; then
-        echo "🔄 Forcing switch from slug '$TEMP_HOST' to stable name 'api-gateway'"
-        API_BASE_URL=$(echo "$API_BASE_URL" | sed "s/$TEMP_HOST/api-gateway/")
-        echo "    -> New API_BASE_URL: $API_BASE_URL"
-    else
-        echo "⚠️  Hostname is already 'api-gateway'. Leaving as is."
-    fi
+# If URL is NOT 'api-gateway', we assume it's the broken Render slug and force-switch it.
+# This assumes we ALWAYS want to use 'api-gateway' for internal comms.
+if [ "$TEMP_HOST" != "api-gateway" ]; then
+    echo "🔄 Forcing switch from '$TEMP_HOST' to stable name 'api-gateway'"
+    API_BASE_URL=$(echo "$API_BASE_URL" | sed "s/$TEMP_HOST/api-gateway/")
+    echo "    -> New API_BASE_URL: $API_BASE_URL"
 fi
 
 echo ">>> FINAL API_BASE_URL: '$API_BASE_URL' <<<"
 
 # --- 2. DETECT SYSTEM DNS ---
-# We use system DNS first, then Google (8.8.8.8) as backup.
-echo "Reading /etc/resolv.conf:"
-cat /etc/resolv.conf
-
-# Extract only valid IPv4 nameservers to avoid IPv6 issues in Nginx
-DNS_RESOLVER=$(awk '/nameserver/ {print $2}' /etc/resolv.conf | grep -v ":" | head -n 1)
-
-if [ -z "$DNS_RESOLVER" ]; then
-    echo "⚠️  WARNING: No IPv4 DNS resolver found. Using Google DNS."
-    DNS_RESOLVER="8.8.8.8"
-else
-    echo "✅ Detected System DNS: $DNS_RESOLVER"
-fi
+# Skipped - Using System DNS implicitly via static proxy_pass
 
 # --- 3. GENERATE CONFIG FILE ---
+
+# CRITICAL CHANGE: Use static proxy_pass to force Nginx to use System DNS (libc) at startup
+# instead of internal resolver. This ensures Search Domains are respected.
 
 cat > /etc/nginx/conf.d/default.conf <<EOF
 server {
@@ -137,19 +81,12 @@ server {
 
     # Proxy API requests
     location /api/ {
-        # 1. Use System DNS + Google DNS Fallback
-        #    This maximizes chances of resolving either internal 'api-gateway' OR public 'https://...'
-        resolver $DNS_RESOLVER 8.8.8.8 valid=5s ipv6=off;
-        
-        # 2. Lazy Resolution (Variable Trick)
-        #    Prevents startup crash if host is temporarily unreachable
-        set \$upstream_target "$API_BASE_URL";
-        
-        # 3. Strip /api/ prefix
+        # 1. Strip /api/ prefix
         rewrite ^/api/(.*) /\$1 break;
         
-        # 4. Proxy to the variable
-        proxy_pass \$upstream_target;
+        # 2. Proxy directly to the URL (Expanded at startup time)
+        #    Nginx will resolve this ONCE at startup using system DNS.
+        proxy_pass $API_BASE_URL;
         
         # SSL Support (Universal)
         proxy_ssl_server_name on;
@@ -159,7 +96,7 @@ server {
         proxy_http_version 1.1;
         proxy_set_header Upgrade \$http_upgrade;
         proxy_set_header Connection 'upgrade';
-        # proxy_set_header Host \$host; # COMENTADO: Dejar que Nginx establezca el Host basado en proxy_pass para soportar rutas públicas de Render
+        # proxy_set_header Host \$host; 
         proxy_cache_bypass \$http_upgrade;
         
         # Error handling
