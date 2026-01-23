@@ -89,6 +89,11 @@ server {
         # Error handling
         proxy_intercept_errors on;
         error_page 502 = @backend_down;
+
+        # Timeouts (Render Cold Start Fix)
+        proxy_connect_timeout 300s;
+        proxy_send_timeout 300s;
+        proxy_read_timeout 300s;
     }
     
     # Custom 502 page for JSON clients
