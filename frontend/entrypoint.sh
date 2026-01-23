@@ -1,14 +1,13 @@
 #!/bin/sh
 set -e
 
-echo "Starting Frontend Entrypoint (Public URL Mode)..."
+echo "Starting Frontend Entrypoint (Universal Mode)..."
 
 # --- 1. ENV VAR SETUP ---
 
 # Fix API_BASE_URL
 if [ -z "$API_BASE_URL" ]; then
     echo "WARNING: API_BASE_URL is empty. Defaulting to internal service."
-    # Fallback to internal if missing, but likely won't work if public is expected
     export API_BASE_URL="http://api-gateway:10000"
 fi
 
@@ -17,8 +16,8 @@ case "$API_BASE_URL" in
   http://*|https://*)
     ;;
   *)
-    echo "Adding https:// to API_BASE_URL (Assuming Public)"
-    export API_BASE_URL="https://$API_BASE_URL"
+    echo "Adding http:// to API_BASE_URL"
+    export API_BASE_URL="http://$API_BASE_URL"
     ;;
 esac
 
@@ -30,9 +29,25 @@ echo "CONFIGURING NGINX WITH:"
 echo "API_BASE_URL = $API_BASE_URL"
 echo "----------------------------------------"
 
-# --- 2. GENERATE CONFIG FILE ---
-# We use the Public URL to guarantee resolution via Google DNS (8.8.8.8).
-# We use the Variable Trick to prevent startup crashes.
+# --- 2. DETECT SYSTEM DNS ---
+# We MUST use the system DNS (usually 127.0.0.11 in Docker) to resolve:
+# a) Internal names (api-gateway)
+# b) Public names (via upstream forwarding)
+# Using Google DNS (8.8.8.8) breaks internal name resolution.
+
+echo "Reading /etc/resolv.conf:"
+cat /etc/resolv.conf
+
+DNS_RESOLVER=$(awk '/nameserver/ {print $2; exit}' /etc/resolv.conf)
+
+if [ -z "$DNS_RESOLVER" ]; then
+    echo "⚠️  WARNING: No DNS resolver found. Defaulting to 127.0.0.11 (Docker DNS)."
+    DNS_RESOLVER="127.0.0.11"
+else
+    echo "✅ Detected System DNS: $DNS_RESOLVER"
+fi
+
+# --- 3. GENERATE CONFIG FILE ---
 
 cat > /etc/nginx/conf.d/default.conf <<EOF
 server {
@@ -48,10 +63,12 @@ server {
 
     # Proxy API requests
     location /api/ {
-        # 1. Use Google DNS to resolve public Render URLs
-        resolver 8.8.8.8 8.8.4.4 valid=300s;
+        # 1. Use the DETECTED SYSTEM RESOLVER.
+        #    This allows resolving both 'api-gateway' (internal) and public URLs.
+        resolver $DNS_RESOLVER valid=5s ipv6=off;
         
-        # 2. Use a variable to force runtime resolution (Prevent startup crash)
+        # 2. Lazy Resolution (Variable Trick)
+        #    This prevents Nginx from crashing at startup if the host isn't ready yet.
         set \$upstream_target "$API_BASE_URL";
         
         # 3. Strip /api/ prefix
@@ -60,7 +77,7 @@ server {
         # 4. Proxy to the variable
         proxy_pass \$upstream_target;
         
-        # SSL Support (Required for Public HTTPS URLs)
+        # SSL Support (in case API_BASE_URL is https)
         proxy_ssl_server_name on;
         proxy_ssl_protocols TLSv1.2 TLSv1.3;
         
@@ -79,7 +96,7 @@ server {
     # Custom 502 page for JSON clients
     location @backend_down {
         default_type application/json;
-        return 502 '{"error": "Bad Gateway", "message": "Backend service ($API_BASE_URL) is unavailable. Please check the logs."}';
+        return 502 '{"error": "Bad Gateway", "message": "Backend service ($API_BASE_URL) is not resolving. DNS: $DNS_RESOLVER. Check logs."}';
     }
 }
 EOF
