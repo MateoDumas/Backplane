@@ -1,14 +1,14 @@
 #!/bin/sh
 set -e
 
-echo "Starting Frontend Entrypoint (Resilient Mode)..."
+echo "Starting Frontend Entrypoint (Wait-for-Host Mode)..."
 
 # --- 1. ENV VAR SETUP ---
 
 # Fix API_BASE_URL
 if [ -z "$API_BASE_URL" ]; then
     echo "WARNING: API_BASE_URL is empty. Defaulting to internal service."
-    export API_BASE_URL="http://api-gateway:8080"
+    export API_BASE_URL="http://api-gateway:10000"
 fi
 
 # Ensure protocol
@@ -24,30 +24,49 @@ esac
 # Sanity check
 if [ "$API_BASE_URL" = "http://" ] || [ "$API_BASE_URL" = "https://" ]; then
     echo "WARNING: Invalid API_BASE_URL. Resetting to default."
-    export API_BASE_URL="http://api-gateway:8080"
-fi
-
-# Fix DNS_RESOLVER - Auto-detect from /etc/resolv.conf
-# We take the first nameserver found.
-DETECTED_DNS=$(awk '/nameserver/ {print $2; exit}' /etc/resolv.conf)
-
-if [ -n "$DETECTED_DNS" ]; then
-    echo "Using system DNS: $DETECTED_DNS"
-    export DNS_RESOLVER="$DETECTED_DNS"
-else
-    echo "WARNING: Could not detect DNS. Fallback to Google (might fail for internal hosts)."
-    export DNS_RESOLVER="8.8.8.8"
+    export API_BASE_URL="http://api-gateway:10000"
 fi
 
 echo "----------------------------------------"
 echo "CONFIGURING NGINX WITH:"
 echo "API_BASE_URL = $API_BASE_URL"
-echo "DNS_RESOLVER = $DNS_RESOLVER"
 echo "----------------------------------------"
 
-# --- 2. GENERATE CONFIG FILE ---
+# --- 2. HOST RESOLUTION CHECK ---
+# Extract hostname to check connectivity
+# Remove protocol (http:// or https://)
+HOST_ONLY=$(echo $API_BASE_URL | sed 's|http://||' | sed 's|https://||' | cut -d: -f1)
+
+echo "Waiting for host resolution: $HOST_ONLY"
+
+# Wait loop (max 60 seconds)
+i=0
+while [ $i -lt 60 ]; do
+    if getent hosts "$HOST_ONLY" > /dev/null 2>&1; then
+        echo "✅ Host $HOST_ONLY resolved successfully."
+        break
+    fi
+    
+    # Fallback for environments without getent (try nslookup)
+    if nslookup "$HOST_ONLY" > /dev/null 2>&1; then
+         echo "✅ Host $HOST_ONLY resolved successfully (via nslookup)."
+         break
+    fi
+
+    echo "⏳ Waiting for $HOST_ONLY to be resolvable... ($i/60)"
+    sleep 1
+    i=$((i+1))
+done
+
+if [ $i -ge 60 ]; then
+    echo "❌ ERROR: Timeout waiting for $HOST_ONLY. Starting Nginx anyway (might crash)."
+fi
+
+# --- 3. GENERATE CONFIG FILE ---
 # We use cat with EOF to avoid sed issues.
 # We escape \$ for Nginx variables that should NOT be substituted by shell.
+# IMPORTANT: We use DIRECT proxy_pass ($API_BASE_URL) instead of variables.
+# This forces Nginx to use the System Resolver (libc) at startup, which respects search domains.
 
 cat > /etc/nginx/conf.d/default.conf <<EOF
 server {
@@ -61,20 +80,12 @@ server {
     }
 
     location /api/ {
-        # Dynamic DNS Resolution
-        # We use the detected system resolver.
-        resolver $DNS_RESOLVER valid=5s ipv6=off;
-        
-        # Runtime variable for proxy_pass to prevent startup crash (Host not found)
-        # This forces Nginx to resolve the DNS at request time, not startup time.
-        set \$upstream_target "$API_BASE_URL";
-        
         # Strip /api/ prefix
         rewrite ^/api/(.*) /\$1 break;
         
-        # Proxy Pass using the variable
-        # We must construct the full URL because variables are used.
-        proxy_pass \$upstream_target\$uri\$is_args\$args;
+        # Direct proxy_pass using the substituted variable (Hardcoded at startup)
+        # This uses the system resolver (supports search domains like .render.internal)
+        proxy_pass $API_BASE_URL;
         
         proxy_http_version 1.1;
         proxy_set_header Upgrade \$http_upgrade;
@@ -89,12 +100,12 @@ server {
     
     location @backend_down {
         default_type application/json;
-        return 502 '{"error": "Bad Gateway", "message": "Could not resolve or connect to API Gateway ($API_BASE_URL). It might be starting up."}';
+        return 502 '{"error": "Bad Gateway", "message": "Could not connect to API Gateway ($API_BASE_URL). Check logs."}';
     }
 }
 EOF
 
-# --- 3. VERIFY AND START ---
+# --- 4. VERIFY AND START ---
 
 echo "Generated Config Content:"
 cat /etc/nginx/conf.d/default.conf
