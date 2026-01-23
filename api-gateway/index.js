@@ -7,6 +7,13 @@ require('dotenv').config();
 const app = express();
 const PORT = process.env.PORT || 8080;
 
+// Helper function to ensure protocol
+const ensureProtocol = (url) => {
+    if (!url) return url;
+    if (url.startsWith('http://') || url.startsWith('https://')) return url;
+    return `http://${url}`;
+};
+
 // Habilitar CORS para permitir peticiones desde el frontend
 app.use(cors());
 
@@ -84,7 +91,7 @@ const onProxyRes = (proxyRes, req, res) => {
 // Rutas de proxy
 // Auth Service
 app.use('/auth', createProxyMiddleware({ 
-    target: process.env.AUTH_SERVICE_URL || 'http://auth-service:3000', 
+    target: ensureProtocol(process.env.AUTH_SERVICE_URL) || 'http://auth-service:3000', 
     changeOrigin: true,
     pathRewrite: {
         '^/auth': '',
@@ -93,7 +100,7 @@ app.use('/auth', createProxyMiddleware({
 
 // Payment Service with Circuit Breaker & Rate Limiter
 app.use('/payments', paymentLimiter, checkPaymentBreaker, createProxyMiddleware({ 
-    target: process.env.PAYMENT_SERVICE_URL || 'http://payment-service:3001', 
+    target: ensureProtocol(process.env.PAYMENT_SERVICE_URL) || 'http://payment-service:3001', 
     changeOrigin: true,
     pathRewrite: {
         '^/payments': '',
@@ -104,7 +111,7 @@ app.use('/payments', paymentLimiter, checkPaymentBreaker, createProxyMiddleware(
 
 // Notification Service
 app.use('/notifications', createProxyMiddleware({ 
-    target: process.env.NOTIFICATION_SERVICE_URL || 'http://notification-service:3002', 
+    target: ensureProtocol(process.env.NOTIFICATION_SERVICE_URL) || 'http://notification-service:3002', 
     changeOrigin: true,
     pathRewrite: {
         '^/notifications': '',
