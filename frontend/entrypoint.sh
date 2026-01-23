@@ -69,10 +69,9 @@ server {
         # Strip /api/ prefix
         rewrite ^/api/(.*) /\$1 break;
         
-        # Simplest possible proxy pass to avoid variable interpolation issues
-        # We use the variable ONLY for the host to delay DNS resolution
-        set \$backend_upstream "http://api-gateway:10000";
-        proxy_pass \$backend_upstream;
+        # FIX: Remove variable usage for proxy_pass to guarantee valid URL
+        # We rely on the resolver directive above to handle DNS updates
+        proxy_pass http://api-gateway:10000;
         
         proxy_http_version 1.1;
         proxy_set_header Upgrade \$http_upgrade;
