@@ -60,6 +60,16 @@ while [ $i -lt 60 ]; do
         RESOLVED_IP=$(nslookup "$HOSTNAME_ONLY" 2>/dev/null | awk '/^Address: / { print $2 }' | head -n1)
     fi
 
+    # Fallback: Try "api-gateway" if the specific hostname fails (handles slugs)
+    if [ -z "$RESOLVED_IP" ] && echo "$HOSTNAME_ONLY" | grep -q "api-gateway"; then
+         echo "⚠️ Resolution failed for $HOSTNAME_ONLY. Trying fallback: api-gateway"
+         FALLBACK_IP=$(nslookup "api-gateway" 2>/dev/null | awk '/^Address: / { print $2 }' | head -n1)
+         if [ -n "$FALLBACK_IP" ]; then
+             echo "✅ Fallback 'api-gateway' resolved to IP: $FALLBACK_IP"
+             RESOLVED_IP="$FALLBACK_IP"
+         fi
+    fi
+
     if [ -n "$RESOLVED_IP" ]; then
          echo "✅ Host $HOSTNAME_ONLY resolved to IP: $RESOLVED_IP"
          break
