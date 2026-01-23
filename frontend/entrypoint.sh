@@ -1,7 +1,7 @@
 #!/bin/sh
 set -e
 
-echo "Starting Frontend Entrypoint (Wait-for-Host Mode)..."
+echo "Starting Frontend Entrypoint (Non-Blocking Mode)..."
 
 # --- 1. ENV VAR SETUP ---
 
@@ -21,126 +21,76 @@ case "$API_BASE_URL" in
     ;;
 esac
 
-# Sanity check
-if [ "$API_BASE_URL" = "http://" ] || [ "$API_BASE_URL" = "https://" ]; then
-    echo "WARNING: Invalid API_BASE_URL. Resetting to default."
-    export API_BASE_URL="http://api-gateway:10000"
-fi
+# Strip trailing slash
+API_BASE_URL=${API_BASE_URL%/}
 
 echo "----------------------------------------"
 echo "CONFIGURING NGINX WITH:"
 echo "API_BASE_URL = $API_BASE_URL"
 echo "----------------------------------------"
 
-# --- 2. HOST RESOLUTION CHECK ---
-# Extract hostname to check connectivity
-# Remove protocol (http:// or https://)
-HOST_WITHOUT_PROTO=$(echo $API_BASE_URL | sed 's|http://||' | sed 's|https://||')
-HOSTNAME_ONLY=$(echo $HOST_WITHOUT_PROTO | cut -d: -f1)
-PORT_ONLY=$(echo $HOST_WITHOUT_PROTO | cut -d: -f2 -s)
+# --- 2. DETECT DNS RESOLVER ---
+# Critical for Render: Use the system's DNS resolver from /etc/resolv.conf
+DNS_RESOLVER=$(awk '/nameserver/ {print $2; exit}' /etc/resolv.conf)
 
-# Default port if missing
-if [ -z "$PORT_ONLY" ]; then
-    PORT_ONLY="80"
-fi
-
-echo "Resolving host: $HOSTNAME_ONLY (Port: $PORT_ONLY)"
-
-# Wait loop (max 60 seconds)
-i=0
-RESOLVED_IP=""
-while [ $i -lt 60 ]; do
-    # Try dig first (cleaner output)
-    if [ -x "$(command -v dig)" ]; then
-        RESOLVED_IP=$(dig +short "$HOSTNAME_ONLY" | head -n1)
-    fi
-
-    # Fallback to nslookup if dig failed or returned empty
-    if [ -z "$RESOLVED_IP" ]; then
-        RESOLVED_IP=$(nslookup "$HOSTNAME_ONLY" 2>/dev/null | awk '/^Address: / { print $2 }' | head -n1)
-    fi
-    
-    # Fallback: Try "api-gateway" if the specific hostname fails (handles slugs)
-    if [ -z "$RESOLVED_IP" ] && echo "$HOSTNAME_ONLY" | grep -q "api-gateway"; then
-         echo "⚠️ Resolution failed for $HOSTNAME_ONLY. Trying fallback: api-gateway"
-         FALLBACK_IP=$(nslookup "api-gateway" 2>/dev/null | awk '/^Address: / { print $2 }' | head -n1)
-         if [ -n "$FALLBACK_IP" ]; then
-             echo "✅ Fallback 'api-gateway' resolved to IP: $FALLBACK_IP"
-             RESOLVED_IP="$FALLBACK_IP"
-         fi
-    fi
-
-    if [ -n "$RESOLVED_IP" ]; then
-         echo "✅ Host $HOSTNAME_ONLY resolved to IP: $RESOLVED_IP"
-         break
-    fi
-    
-    # Debug every 10s
-    if [ $((i % 10)) -eq 0 ]; then
-        echo "🔍 Debug: Resolution failed for $HOSTNAME_ONLY"
-        nslookup "$HOSTNAME_ONLY" || true
-    fi
-
-    echo "⏳ Waiting for $HOSTNAME_ONLY to be resolvable... ($i/60)"
-    sleep 1
-    i=$((i+1))
-done
-
-# Force loop to continue until resolution success (BLOCKING)
-# This prevents Nginx from starting until we have a valid IP
-if [ -z "$RESOLVED_IP" ]; then
-    echo "❌ ERROR: Could not resolve $HOSTNAME_ONLY. Retrying indefinitely..."
-    exec /entrypoint.sh
+if [ -z "$DNS_RESOLVER" ]; then
+    echo "⚠️  WARNING: No DNS resolver found. Defaulting to Google DNS (8.8.8.8)."
+    DNS_RESOLVER="8.8.8.8"
+else
+    echo "✅ Detected System DNS: $DNS_RESOLVER"
 fi
 
 # --- 3. GENERATE CONFIG FILE ---
-# We use cat with EOF to avoid sed issues.
-# We escape \$ for Nginx variables that should NOT be substituted by shell.
-# STRATEGY: Hardcoded IP.
-# We resolved the IP in bash, so we put it directly into the config.
-# This eliminates ALL DNS and variable issues in Nginx.
+# We use a runtime variable for proxy_pass to prevent Nginx from crashing 
+# if the host is not resolvable at startup (Lazy Resolution).
 
 cat > /etc/nginx/conf.d/default.conf <<EOF
 server {
     listen 80;
     server_name localhost;
 
+    # Serve static frontend files
     location / {
         root /usr/share/nginx/html;
         index index.html index.htm;
         try_files \$uri \$uri/ /index.html;
     }
 
+    # Proxy API requests
     location /api/ {
-        # Strip /api/ prefix
+        # 1. Use detected resolver
+        resolver $DNS_RESOLVER valid=10s ipv6=off;
+        
+        # 2. Use a variable for the upstream target to force lazy resolution
+        #    This prevents "host not found" startup errors.
+        set \$upstream_target "$API_BASE_URL";
+        
+        # 3. Strip /api/ prefix
         rewrite ^/api/(.*) /\$1 break;
         
-        # Direct proxy_pass using the RESOLVED IP
-        # No variables, no resolvers, no magic. Just the IP.
-        proxy_pass http://$RESOLVED_IP:10000;
+        # 4. Proxy to the variable
+        proxy_pass \$upstream_target;
         
+        # Headers
         proxy_http_version 1.1;
         proxy_set_header Upgrade \$http_upgrade;
         proxy_set_header Connection 'upgrade';
+        proxy_set_header Host \$host;
         proxy_cache_bypass \$http_upgrade;
-        proxy_ssl_server_name on;
         
-        # Error handling
+        # Error handling for bad gateway (upstream down/booting)
         proxy_intercept_errors on;
         error_page 502 = @backend_down;
     }
     
+    # Custom 502 page for JSON clients
     location @backend_down {
         default_type application/json;
-        return 502 '{"error": "Bad Gateway", "message": "Backend ($API_BASE_URL) is not resolvable or unreachable. It might be starting up. Retry in a few seconds."}';
+        return 502 '{"error": "Bad Gateway", "message": "Backend service ($API_BASE_URL) is unavailable or starting up. Please retry in a moment."}';
     }
 }
 EOF
 
-# --- 4. VERIFY AND START ---
-
-echo "Generated Config Content:"
-cat /etc/nginx/conf.d/default.conf
-
-echo "Starting Nginx (Runtime Resolution Mode)..."
-exec nginx -g 'daemon off;'
+echo "✅ Nginx configuration generated."
+echo "🚀 Starting Nginx..."
+exec nginx -g "daemon off;"
