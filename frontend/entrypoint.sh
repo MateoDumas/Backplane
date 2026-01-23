@@ -14,6 +14,18 @@ if [ -z "$API_BASE_URL" ]; then
     export API_BASE_URL="http://api-gateway:10000"
 else
     echo "✅ API_BASE_URL provided by environment."
+    
+    # FORCE INTERNAL URL OVERRIDE
+    # If Render provides the public URL (onrender.com), we override it to the internal one.
+    # This avoids the Public Load Balancer 100s timeout limit.
+    case "$API_BASE_URL" in
+      *onrender.com*)
+        echo "⚠️  DETECTED PUBLIC RENDER URL: '$API_BASE_URL'"
+        echo "    Overriding to INTERNAL URL to bypass Load Balancer timeouts."
+        export API_BASE_URL="http://api-gateway:10000"
+        echo "    -> New API_BASE_URL: $API_BASE_URL"
+        ;;
+    esac
 fi
 
 # Ensure protocol
