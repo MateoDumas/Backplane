@@ -2,43 +2,10 @@
 set -e
 
 echo "=== STARTING FRONTEND ENTRYPOINT ==="
-echo "Mode: Robust DNS + Public/Private Fallback"
-
-# --- 1. DEBUG ENV VARS ---
 echo ">>> RAW API_BASE_URL: '$API_BASE_URL' <<<"
+echo "Mode: ROBUST DNS + Public/Private Fallback"
 
-if [ -z "$API_BASE_URL" ]; then
-    echo "⚠️  WARNING: API_BASE_URL is NOT set by Render!"
-    echo "    This suggests 'fromService: property: url' failed or service is not ready."
-    echo "    Falling back to internal default: http://api-gateway:10000"
-    export API_BASE_URL="http://api-gateway:10000"
-else
-    echo "✅ API_BASE_URL provided by environment."
-    
-    # FORCE INTERNAL URL OVERRIDE
-    # If Render provides the public URL (onrender.com), we override it to the internal one.
-    # This avoids the Public Load Balancer 100s timeout limit.
-    case "$API_BASE_URL" in
-      *onrender.com*)
-        echo "⚠️  DETECTED PUBLIC RENDER URL: '$API_BASE_URL'"
-        echo "    Overriding to INTERNAL URL to bypass Load Balancer timeouts."
-        export API_BASE_URL="http://api-gateway:10000"
-        echo "    -> New API_BASE_URL: $API_BASE_URL"
-        ;;
-    esac
-fi
-
-# Ensure protocol
-case "$API_BASE_URL" in
-  http://*|https://*)
-    ;;
-  *)
-    echo "Adding http:// to API_BASE_URL"
-    export API_BASE_URL="http://$API_BASE_URL"
-    ;;
-esac
-
-# Strip trailing slash
+# --- 1. SETUP ENV ---
 API_BASE_URL=${API_BASE_URL%/}
 
 # --- 2. WAIT FOR DNS RESOLUTION ---

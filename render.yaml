@@ -86,7 +86,7 @@ services:
         fromService:
           type: web
           name: api-gateway
-          property: hostport
+          property: url
 
 databases:
   - name: backplane-db
