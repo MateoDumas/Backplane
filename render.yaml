@@ -82,13 +82,11 @@ services:
     envVars:
       - key: PORT
         value: 80
-      - key: DNS_RESOLVER
-        value: 8.8.8.8
       - key: API_BASE_URL
         fromService:
           type: web
           name: api-gateway
-          property: hostport
+          property: url
 
 databases:
   - name: backplane-db
