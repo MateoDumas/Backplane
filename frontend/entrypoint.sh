@@ -114,15 +114,15 @@ server {
         #    Nginx will resolve this ONCE at startup using system DNS.
         proxy_pass $API_BASE_URL;
         
-        # SSL Support (Universal)
+        # SSL Support (Universal) - IMPORTANT FOR PUBLIC URLs
         proxy_ssl_server_name on;
         proxy_ssl_protocols TLSv1.2 TLSv1.3;
         
-        # Headers
+        # Headers - Simplify to avoid conflicts
         proxy_http_version 1.1;
         proxy_set_header Upgrade \$http_upgrade;
         proxy_set_header Connection 'upgrade';
-        # proxy_set_header Host \$host; 
+        # proxy_set_header Host \$host;  <-- NEVER UNCOMMENT THIS FOR PUBLIC URLs
         proxy_cache_bypass \$http_upgrade;
         
         # Error handling
